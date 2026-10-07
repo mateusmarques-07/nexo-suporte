@@ -36,14 +36,16 @@ export const NOMES_TIPO = {
 };
 
 export const AJUDA = [
-  "*Atalhos do NEXO Suporte*",
+  "*NEXO Suporte*",
+  "Pode escrever do seu jeito ou encaminhar a mensagem/print do time. Eu digo o que entendi e você responde *sim*.",
+  "Se quiser ir mais rápido, os atalhos também funcionam:",
   "• rt 6148 vanessa  (troca o RT; empresas 6024 e 6148)",
   "• trib 3575 3647  (item com erro, item que já entrou na nota)",
   "• ibs 2609 venda 117327  (acrescente 'outros' se a operação for Outros)",
   "• corte 19  (cria o produto de corte a partir do código)",
   "• rej 778  (rejeição de nota)",
   "• cancelar 4512  (só registra; cancelamento tem trava)",
-  "• ok  (aceita a sugestão que eu mandar)",
+  "• sim  (aceita a sugestão que eu mandar)",
   "• nova  (o próximo envio abre outra demanda)",
 ].join("\n");
 

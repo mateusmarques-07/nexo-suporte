@@ -89,6 +89,7 @@ export async function POST(request: Request) {
     const { data: d } = await db
       .from("demandas")
       .select("id, sugestao")
+      .eq("status", "recebida") // arquivada ou já resolvida não é confirmada por engano
       .not("sugestao", "is", null)
       .is("comando", null)
       .gt("created_at", new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString())
@@ -164,11 +165,7 @@ export async function POST(request: Request) {
     }
   } else if (nova) {
     await db.from("eventos").insert({ demanda_id: demandaId, tipo: "aberta", detalhe: { via: "whatsapp" } });
-    resposta =
-      `Recebi. Demanda #${demandaId} aberta.\n` +
-      (e.tipo === "imagem"
-        ? "Vou ler o print e te mando uma sugestão de atalho."
-        : "Pode mandar os prints. Se já souber, mande o atalho (ex.: trib 3575 3647). Digite ajuda pra ver todos.");
+    resposta = `Recebi. Demanda #${demandaId} aberta.\n` + (e.tipo === "imagem" ? "Vou ler o print e já te digo o que entendi." : "Já te digo o que entendi.");
   }
   if (resposta) await responder(resposta, demandaId);
 

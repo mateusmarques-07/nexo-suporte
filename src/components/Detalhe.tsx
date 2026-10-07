@@ -94,7 +94,7 @@ export function Detalhe({
       {d.sugestao && !d.comando && (
         <div className="sug">
           <span>
-            Li no print e sugiro: <b className="mono">{d.sugestao}</b>
+            Entendi e sugiro: <b className="mono">{d.sugestao}</b>
           </span>
           <button className="btn" disabled={pendente} onClick={() => rodar(() => aplicarAtalho(d.id, d.sugestao!), "Sugestão aplicada.")}>
             Usar sugestão

@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { analisar, mensagemSugestao } from "../shared/ocr-regras.mjs";
 import { respostaPadrao } from "../shared/respostas.mjs";
+import { interpretar } from "../shared/atalhos.mjs";
+import { entenderPedido, prepararImagem } from "./ia.mjs";
 
 const run = promisify(execFile);
 const aqui = path.dirname(fileURLToPath(import.meta.url));
@@ -90,37 +92,102 @@ async function processarOcr() {
   }
 }
 
-// Depois que os prints de uma demanda foram lidos (e o Mateus parou de mandar
-// coisa há 20 s), manda UMA mensagem com o que foi entendido.
+// Quando o Mateus para de mandar coisa numa demanda (12 s de silêncio), a IA lê
+// a conversa + prints e responde UMA vez: "Entendi: ... Posso fazer?" ou uma pergunta.
+// Se ele responder corrigindo, a demanda é lida de novo (mensagem mais nova que o último aviso).
+// Sem IA (sem chave ou OpenAI fora): cai na leitura antiga dos prints (Tesseract + regras).
 async function sugerir() {
-  const corte = new Date(Date.now() - 20_000).toISOString();
+  const corte = new Date(Date.now() - 12_000).toISOString();
   const { data: abertas } = await db
     .from("demandas")
     .select("id")
     .eq("status", "recebida")
     .is("comando", null)
-    .is("sugestao", null)
     .lt("ultima_atividade", corte)
     .gt("created_at", new Date(Date.now() - 6 * 3600_000).toISOString())
     .limit(10);
   for (const d of abertas ?? []) {
-    const [{ data: anexos }, { data: avisado }] = await Promise.all([
-      db.from("anexos").select("ocr_status, ocr_dados").eq("demanda_id", d.id),
-      db.from("eventos").select("id").eq("demanda_id", d.id).eq("tipo", "ocr_aviso").limit(1),
+    const [{ data: msgs }, { data: anexos }, { data: avisos }] = await Promise.all([
+      db.from("mensagens").select("direcao, texto, created_at").eq("demanda_id", d.id).order("created_at"),
+      db.from("anexos").select("storage_path, mimetype, ocr_status, ocr_dados, created_at").eq("demanda_id", d.id).order("created_at"),
+      db.from("eventos").select("created_at").eq("demanda_id", d.id).in("tipo", ["ocr_aviso", "ia_aviso"]).order("created_at", { ascending: false }).limit(1),
     ]);
-    if (!anexos?.length || avisado?.length) continue;
-    if (anexos.some((x) => x.ocr_status === "pendente")) continue;
-    const analises = anexos.map((x) => x.ocr_dados).filter(Boolean);
-    const { sugestao, texto } = mensagemSugestao(d.id, analises);
-    if (sugestao) await db.from("demandas").update({ sugestao, updated_at: new Date().toISOString() }).eq("id", d.id);
-    await db.from("eventos").insert({ demanda_id: d.id, tipo: "ocr_aviso", detalhe: { sugestao } });
+    const entradas = (msgs ?? []).filter((m) => m.direcao === "entrada");
+    if (!entradas.length) continue;
+    const ultimaEntrada = Math.max(...entradas.map((m) => new Date(m.created_at).getTime()));
+    if (avisos?.[0] && new Date(avisos[0].created_at).getTime() >= ultimaEntrada) continue; // já respondido
+    const recebidos = (anexos ?? []).filter((a) => !a.storage_path.includes("/sempre-"));
+    if (recebidos.some((x) => x.ocr_status === "pendente")) continue; // espera o OCR (plano B)
+
+    let texto;
+    let sugestao = null;
+    let detalhe;
     try {
-      await enviar(d.id, texto);
+      if (!process.env.OPENAI_API_KEY) throw new Error("sem OPENAI_API_KEY");
+      const r = await lerComIa(msgs, recebidos);
+      const a = r.atalho ? interpretar(r.atalho) : null;
+      const valido = a?.acao === "pedido" && !a.erro;
+      sugestao = valido ? a.comando : null;
+      texto = await textoDaIa(d.id, r, a, valido);
+      detalhe = { via: "ia", modelo: r.modelo, atalho_ia: r.atalho, sugestao, uso: r.uso };
     } catch (err) {
-      await db.from("eventos").insert({ demanda_id: d.id, tipo: "erro_envio", detalhe: { erro: String(err) } });
+      log("ia falhou", d.id, String(err));
+      const analises = recebidos.map((x) => x.ocr_dados).filter(Boolean);
+      if (analises.length) ({ sugestao, texto } = mensagemSugestao(d.id, analises));
+      else texto = `#${d.id}: não consegui entender agora. Tente de novo em instantes ou mande o atalho (ex.: rt 6024 karoline).`;
+      detalhe = { via: "regras", erro_ia: String(err).slice(0, 300), sugestao };
     }
-    log("sugestão enviada", d.id, sugestao ?? "(sem sugestão)");
+
+    // sugestão nova substitui a anterior (o "sim" confirma sempre a mais recente)
+    await db.from("demandas").update({ sugestao, updated_at: new Date().toISOString() }).eq("id", d.id);
+    await db.from("eventos").insert({ demanda_id: d.id, tipo: detalhe.via === "ia" ? "ia_aviso" : "ocr_aviso", detalhe });
+    if (texto) {
+      try {
+        await enviar(d.id, texto);
+      } catch (err) {
+        await db.from("eventos").insert({ demanda_id: d.id, tipo: "erro_envio", detalhe: { erro: String(err) } });
+      }
+    }
+    log("sugestão", d.id, detalhe.via, sugestao ?? "(sem sugestão)");
   }
+}
+
+/** Monta a conversa (Mateus × sistema) e os prints recebidos e pergunta pra IA. */
+async function lerComIa(msgs, anexos) {
+  const conversa = msgs
+    .filter((m) => m.texto)
+    .map((m) => ({ papel: m.direcao === "entrada" ? "mateus" : "sistema", texto: m.texto }));
+  const imagens = [];
+  for (const a of anexos.filter((x) => x.mimetype?.startsWith("image/")).slice(-4)) {
+    const local = path.join(TMP, `ia-${path.basename(a.storage_path)}`);
+    try {
+      const { data: blob, error } = await db.storage.from("anexos").download(a.storage_path);
+      if (error) throw new Error(error.message);
+      fs.writeFileSync(local, Buffer.from(await blob.arrayBuffer()));
+      const pronto = await prepararImagem(local);
+      imagens.push({ base64: fs.readFileSync(pronto).toString("base64"), mime: "image/jpeg" });
+      fs.rmSync(pronto, { force: true });
+    } finally {
+      fs.rmSync(local, { force: true });
+    }
+  }
+  if (!conversa.length && !imagens.length) throw new Error("demanda sem texto nem print");
+  return entenderPedido({ conversa, imagens });
+}
+
+async function textoDaIa(id, r, a, valido) {
+  const viu = r.explicacao ? `\n${r.explicacao}` : "";
+  if (valido) {
+    if (a.tipo === "canc")
+      return `Entendi #${id}: ${a.resumo}.${viu}\nCancelamento nunca é automático: responda *sim* só pra registrar na mesa.`;
+    const { data: sol } = await db.from("solucoes").select("pronta").eq("chave", a.tipo).maybeSingle();
+    return sol?.pronta
+      ? `Entendi #${id}: ${a.resumo}.${viu}\nPosso fazer? Responda *sim*.`
+      : `Entendi #${id}: ${a.resumo}.${viu}\nEssa correção ainda é feita à mão. Responda *sim* pra registrar na mesa.`;
+  }
+  if (r.pergunta) return `#${id}: ${r.pergunta}`;
+  if (a?.erro) return `#${id}: ${a.erro}`;
+  return null; // não era pedido (ex.: "obrigado"): não responde nada
 }
 
 // ---------- correções no Sempre ----------
