@@ -9,6 +9,15 @@ import { AJUDA, interpretar, mesmoNumero } from "../../../../shared/atalhos.mjs"
 export const maxDuration = 30;
 
 const RODAPE = "Por enquanto a correção no Sempre ainda não é automática: ficou registrado na sua mesa.";
+const RODAPE_AUTO = "Vou corrigir agora no Sempre e te aviso aqui (leva uns 2 minutos).";
+
+/** Se a solução já corrige sozinha, põe a demanda na fila do worker. Devolve o rodapé da resposta. */
+async function pedirCorrecao(db: ReturnType<typeof createAdminClient>, demandaId: number, tipo: string) {
+  const { data: sol } = await db.from("solucoes").select("pronta").eq("chave", tipo).maybeSingle();
+  if (!sol?.pronta) return RODAPE;
+  await db.from("demandas").update({ correcao_pedida_em: new Date().toISOString() }).eq("id", demandaId);
+  return RODAPE_AUTO;
+}
 
 export async function POST(request: Request) {
   const url = new URL(request.url);
@@ -97,7 +106,8 @@ export async function POST(request: Request) {
       .update({ tipo: sugerido.tipo, comando: sugerido.comando, params: sugerido.params, resumo: sugerido.resumo, status: "entendida", updated_at: new Date().toISOString() })
       .eq("id", d.id);
     await db.from("eventos").insert({ demanda_id: d.id, tipo: "sugestao_aceita", detalhe: { comando: sugerido.comando } });
-    await responder(`Confirmado #${d.id}: ${sugerido.resumo}.\n${RODAPE}`, d.id);
+    const rodape = await pedirCorrecao(db, d.id, sugerido.tipo);
+    await responder(`Confirmado #${d.id}: ${sugerido.resumo}.\n${rodape}`, d.id);
     return NextResponse.json({ ok: true });
   }
 
@@ -147,9 +157,10 @@ export async function POST(request: Request) {
         .update({ tipo: atalho.tipo, comando: atalho.comando, params: atalho.params, resumo: atalho.resumo, status: "entendida", updated_at: new Date().toISOString() })
         .eq("id", demandaId);
       await db.from("eventos").insert({ demanda_id: demandaId, tipo: "atalho", detalhe: { comando: atalho.comando } });
+      const rodape = await pedirCorrecao(db, demandaId, atalho.tipo);
       resposta = nova
-        ? `Recebi. Demanda #${demandaId} aberta.\nEntendi: ${atalho.resumo}.\n${RODAPE}`
-        : `Entendi #${demandaId}: ${atalho.resumo}.\n${RODAPE}`;
+        ? `Recebi. Demanda #${demandaId} aberta.\nEntendi: ${atalho.resumo}.\n${rodape}`
+        : `Entendi #${demandaId}: ${atalho.resumo}.\n${rodape}`;
     }
   } else if (nova) {
     await db.from("eventos").insert({ demanda_id: demandaId, tipo: "aberta", detalhe: { via: "whatsapp" } });

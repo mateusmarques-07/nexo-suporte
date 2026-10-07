@@ -44,6 +44,9 @@ export async function aplicarAtalho(demandaId: number, texto: string): Promise<{
     .eq("id", demandaId);
   if (error) return { erro: error.message };
   await registrar(supabase, demandaId, "atalho_mesa", { comando: a.comando });
+  // solução que já corrige sozinha: entra na fila do worker do VPS
+  const { data: sol } = await supabase.from("solucoes").select("pronta").eq("chave", a.tipo).maybeSingle();
+  if (sol?.pronta) await supabase.from("demandas").update({ correcao_pedida_em: new Date().toISOString() }).eq("id", demandaId);
   revalidatePath("/");
   return {};
 }

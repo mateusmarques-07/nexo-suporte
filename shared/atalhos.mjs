@@ -1,10 +1,14 @@
 // Atalhos de texto que o Mateus manda junto com o pedido no WhatsApp do NEXO Suporte.
 // Usado pelo receptor do WhatsApp (Vercel) e pelo worker do VPS. Sem IA: regra fixa.
 
-/** Responsáveis técnicos permitidos por empresa (campo "Responsável técnico" do Sempre). */
+/**
+ * Responsáveis técnicos permitidos por empresa (campo "Responsável técnico" do Sempre,
+ * tela Empresa fat004). O CNPJ é trava: o robô só salva se a tela aberta for desse CNPJ.
+ */
 export const RTS = {
   "6024": {
     nome: "Águas Claras",
+    cnpj: "05.421.585/0001-37",
     opcoes: [
       "Micaelli Martins Souza Marques - COREN/DF: 474.784",
       "Karoline Nogueira Martins - COREN/DF: 679.230",
@@ -12,6 +16,7 @@ export const RTS = {
   },
   "6148": {
     nome: "Winner 6148",
+    cnpj: "05.421.585/0002-18",
     opcoes: [
       "Carliane Sousa Silva - COREN/DF: 618.783",
       "Vanessa Mourato Santos - COREN/DF: 643.339",

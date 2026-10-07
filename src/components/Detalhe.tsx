@@ -14,6 +14,7 @@ export function Detalhe({
   demanda: d,
   mensagens,
   anexos,
+  eventos,
   respostaSugerida,
   quando,
 }: {
@@ -46,8 +47,26 @@ export function Detalhe({
   };
 
   const textosEntrada = mensagens.filter((m) => m.direcao === "entrada" && m.texto);
-  const ocrs = anexos.filter((a) => a.ocr_texto);
+  // prints tirados pelo worker no Sempre ficam com prefixo "sempre-"; o resto é o que chegou
+  const doSempre = anexos.filter((a) => a.storage_path.includes("/sempre-"));
+  const recebidos = anexos.filter((a) => !a.storage_path.includes("/sempre-"));
+  const ocrs = recebidos.filter((a) => a.ocr_texto);
   const respondida = d.status === "respondida";
+  // eventos vêm do mais novo pro mais antigo
+  const correcao = eventos.find((e) => e.tipo === "correcao_ok" || e.tipo === "correcao_erro");
+  const det = (correcao?.detalhe ?? {}) as { antes?: string; depois?: string; mudou?: boolean; erro?: string };
+  const curto = (s?: string) => String(s ?? "").split(" - ")[0];
+
+  let notaPlano = "Ainda sem atalho. Use o do print, digite um aqui ou mande pelo WhatsApp.";
+  if (d.status === "corrigindo") notaPlano = "Corrigindo no Sempre agora. Esta tela atualiza sozinha.";
+  else if (correcao?.tipo === "correcao_ok")
+    notaPlano = det.mudou
+      ? `Corrigido no Sempre às ${hora(correcao.created_at)}: ${curto(det.antes)} → ${curto(det.depois)} (conferido depois de salvar).`
+      : `Conferido no Sempre às ${hora(correcao.created_at)}: já estava ${curto(det.antes)}, nada foi mudado.`;
+  else if (correcao?.tipo === "correcao_erro")
+    notaPlano = `Não consegui corrigir no Sempre (${det.erro ?? "erro desconhecido"}). Corrija à mão ou aplique o atalho de novo pra tentar outra vez.`;
+  else if (d.comando)
+    notaPlano = "Atalho registrado. Se a correção automática dessa solução já estiver pronta, ela roda em seguida; se não, corrija no Sempre e envie a resposta abaixo.";
 
   return (
     <div className="det" key={d.id}>
@@ -99,18 +118,26 @@ export function Detalhe({
             Aplicar atalho
           </button>
         </div>
-        <p className="nota" style={{ margin: 0 }}>
-          {d.comando
-            ? "A correção automática no Sempre entra nas próximas fases. Por enquanto: faça a correção no Sempre e depois envie a resposta abaixo."
-            : "Ainda sem atalho. Use o do print, digite um aqui ou mande pelo WhatsApp."}
-        </p>
+        <p className="nota" style={{ margin: 0 }}>{notaPlano}</p>
+        {doSempre.length > 0 && (
+          <div className="prints">
+            {doSempre.map((a) =>
+              a.url ? (
+                <a key={a.id} href={a.url} target="_blank" rel="noreferrer" title="Tela do Sempre">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={a.url} alt="Tela do Sempre" />
+                </a>
+              ) : null
+            )}
+          </div>
+        )}
       </div>
 
       <div className="blk">
         <h3 className="rot">O que chegou</h3>
-        {anexos.length > 0 && (
+        {recebidos.length > 0 && (
           <div className="prints">
-            {anexos.map((a) =>
+            {recebidos.map((a) =>
               a.url ? (
                 <a key={a.id} href={a.url} target="_blank" rel="noreferrer">
                   {a.mimetype?.startsWith("image/") ? (
@@ -134,7 +161,7 @@ export function Detalhe({
             ))}
           </div>
         )}
-        {!anexos.length && !textosEntrada.length && <p className="nota">Só mensagens sem texto ou print.</p>}
+        {!recebidos.length && !textosEntrada.length && <p className="nota">Só mensagens sem texto ou print.</p>}
         {ocrs.length > 0 && (
           <details className="ocr">
             <summary>Texto lido dos prints</summary>
